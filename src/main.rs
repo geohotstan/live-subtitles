@@ -2,6 +2,7 @@ mod app;
 mod audio;
 mod config;
 mod macos_capture;
+mod streaming;
 mod transcribe;
 mod ui;
 
@@ -19,4 +20,3 @@ fn main() -> anyhow::Result<()> {
     let cli = <Cli as clap::Parser>::parse();
     run(cli)
 }
-

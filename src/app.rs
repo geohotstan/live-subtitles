@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use crate::audio::Segmenter;
 use crate::config::{Cli, Engine, OutputLanguage};
 use crate::macos_capture::start_macos_system_audio_capture;
+use crate::streaming::{Stabilizer, StreamingConfig, StreamingEvent, StreamingSegmenter};
 use crate::transcribe::{OpenAiTranscriber, Transcriber, TranscriberConfig, WhisperLocalTranscriber};
 use crate::ui::run_overlay;
 
@@ -70,6 +71,15 @@ impl SharedCaption {
     }
 }
 
+fn combine_committed_partial(committed: &str, partial: &str) -> String {
+    match (committed.trim().is_empty(), partial.trim().is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => committed.trim().to_string(),
+        (true, false) => partial.trim().to_string(),
+        (false, false) => format!("{} {}", committed.trim(), partial.trim()),
+    }
+}
+
 pub fn run(cli: Cli) -> anyhow::Result<()> {
     #[cfg(not(target_os = "macos"))]
     {
@@ -83,7 +93,14 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         let output_language = SharedOutputLanguage::new(cli.output_language);
 
         let (audio_tx, audio_rx) = crossbeam_channel::bounded::<Vec<f32>>(256);
-        let (segment_tx, segment_rx) = crossbeam_channel::bounded::<Vec<f32>>(16);
+        let (event_tx, event_rx) = crossbeam_channel::bounded::<StreamingEvent>(32);
+
+        let streaming_enabled = cli.streaming && matches!(cli.engine, Engine::Local);
+        if cli.streaming && matches!(cli.engine, Engine::OpenAI) {
+            tracing::warn!(
+                "streaming partials are disabled for OpenAI engine; use --streaming=false to silence"
+            );
+        }
 
         let segmenter_cfg = crate::audio::SegmenterConfig {
             vad_threshold: cli.vad_threshold,
@@ -93,20 +110,51 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
             sample_rate_hz: 16_000,
         };
 
+        let streaming_cfg = StreamingConfig {
+            sample_rate_hz: 16_000,
+            vad_threshold: cli.vad_threshold,
+            vad_end_silence_s: cli.vad_end_silence_s,
+            max_segment_s: cli.max_segment_s,
+            pre_roll_s: cli.pre_roll_s,
+            min_speech_ms: cli.min_speech_ms,
+            asr_step_ms: cli.asr_step_ms,
+            max_window_s: cli.max_window_s,
+        };
+
         let stop_processing = stop.clone();
         let processing_handle = std::thread::spawn(move || {
-            let mut segmenter = Segmenter::new(segmenter_cfg);
-            while !stop_processing.load(Ordering::Relaxed) {
-                match audio_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(chunk) => {
-                        for segment in segmenter.push_audio(&chunk) {
-                            if segment_tx.try_send(segment).is_err() {
-                                tracing::warn!("segment queue full; dropping segment");
+            if streaming_enabled {
+                let mut segmenter = StreamingSegmenter::new(streaming_cfg);
+                while !stop_processing.load(Ordering::Relaxed) {
+                    match audio_rx.recv_timeout(Duration::from_millis(50)) {
+                        Ok(chunk) => {
+                            for event in segmenter.push_audio(&chunk) {
+                                if event_tx.try_send(event).is_err() {
+                                    tracing::warn!("segment queue full; dropping event");
+                                }
                             }
                         }
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
                     }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                let mut segmenter = Segmenter::new(segmenter_cfg);
+                while !stop_processing.load(Ordering::Relaxed) {
+                    match audio_rx.recv_timeout(Duration::from_millis(50)) {
+                        Ok(chunk) => {
+                            for segment in segmenter.push_audio(&chunk) {
+                                if event_tx
+                                    .try_send(StreamingEvent::Final(segment))
+                                    .is_err()
+                                {
+                                    tracing::warn!("segment queue full; dropping segment");
+                                }
+                            }
+                        }
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                    }
                 }
             }
         });
@@ -143,28 +191,60 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         let output_language_for_worker = output_language.clone();
         let stop_transcribe = stop.clone();
         let no_ui = cli.no_ui;
+        let partial_stable_iters = cli.partial_stable_iters;
 
         let transcription_handle = std::thread::spawn(move || {
+            let mut stabilizer = Stabilizer::new(partial_stable_iters);
+            let mut last_caption = String::new();
+
             while !stop_transcribe.load(Ordering::Relaxed) {
-                match segment_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(segment) => {
+                match event_rx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(event) => {
                         let transcribe_cfg = TranscriberConfig {
                             input_language: input_language.clone(),
                             output_language: output_language_for_worker.get(),
                         };
 
-                        match transcriber.transcribe(&segment, &transcribe_cfg) {
-                        Ok(text) => {
-                            if !text.trim().is_empty() {
-                                captions_for_worker.set_text(text.clone());
-                                if no_ui {
-                                    println!("{text}");
+                        match event {
+                            StreamingEvent::Partial(audio) => {
+                                match transcriber.transcribe(&audio, &transcribe_cfg) {
+                                    Ok(text) => {
+                                        let (committed, partial) = stabilizer.update(&text);
+                                        let display = combine_committed_partial(&committed, &partial);
+                                        if display != last_caption {
+                                            captions_for_worker.set_text(display.clone());
+                                            last_caption = display;
+                                        }
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!("transcription failed: {err:#}");
+                                    }
                                 }
                             }
-                        }
-                        Err(err) => {
-                            tracing::warn!("transcription failed: {err:#}");
-                        }
+                            StreamingEvent::Final(audio) => {
+                                match transcriber.transcribe(&audio, &transcribe_cfg) {
+                                    Ok(text) => {
+                                        let final_text = stabilizer.finalize(&text);
+                                        if !final_text.trim().is_empty() {
+                                            captions_for_worker.set_text(final_text.clone());
+                                            last_caption = final_text.clone();
+                                            if no_ui {
+                                                println!("{final_text}");
+                                            }
+                                        }
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!("transcription failed: {err:#}");
+                                    }
+                                }
+                            }
+                            StreamingEvent::Reset => {
+                                stabilizer.reset();
+                                if !last_caption.is_empty() {
+                                    captions_for_worker.set_text(String::new());
+                                    last_caption.clear();
+                                }
+                            }
                         }
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
