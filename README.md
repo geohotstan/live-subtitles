@@ -23,7 +23,7 @@ This repo is an MVP focused on **macOS 15 (Sequoia) and newer**.
 cargo run --release -- --engine local
 ```
 
-To download a smaller model:
+To download a specific model preset (`tiny`, `base`, `small`, `medium`, `large`):
 
 ```bash
 cargo run --release -- --engine local --whisper-model-preset tiny

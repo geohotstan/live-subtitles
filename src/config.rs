@@ -26,6 +26,8 @@ pub enum WhisperModelPreset {
     Tiny,
     Base,
     Small,
+    Medium,
+    Large,
 }
 
 #[derive(Debug, Parser, Clone)]

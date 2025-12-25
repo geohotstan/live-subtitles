@@ -29,6 +29,14 @@ pub fn resolve_whisper_model_path(
             "ggml-small.bin",
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
         ),
+        WhisperModelPreset::Medium => (
+            "ggml-medium.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+        ),
+        WhisperModelPreset::Large => (
+            "ggml-large-v3.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+        ),
     };
 
     let model_dir = PathBuf::from("models");
