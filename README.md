@@ -17,59 +17,67 @@ This repo is an MVP focused on **macOS 15 (Sequoia) and newer**.
 
 ## Run
 
-### Local (on-device Whisper)
+### Tauri UI (overlay)
 
 ```bash
-cargo run --release -- --engine local
+cargo run --manifest-path src-tauri/Cargo.toml
+```
+
+Optional: pass the same CLI flags used by the headless binary after `--`:
+
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml -- --engine local --whisper-model-preset tiny
+```
+
+### Headless (no overlay)
+
+Local (on-device Whisper):
+
+```bash
+cargo run --release -- --no-ui --engine local
 ```
 
 Default preset is `medium`. To download a smaller model:
 
 ```bash
-cargo run --release -- --engine local --whisper-model-preset tiny
+cargo run --release -- --no-ui --engine local --whisper-model-preset tiny
 ```
 
 To use an existing model file:
 
 ```bash
-cargo run --release -- --engine local --whisper-model /path/to/ggml-medium.bin
+cargo run --release -- --no-ui --engine local --whisper-model /path/to/ggml-medium.bin
+```
 
 To use large v3:
 
 ```bash
-cargo run --release -- --engine local --whisper-model-preset large-v3
-```
+cargo run --release -- --no-ui --engine local --whisper-model-preset large-v3
 ```
 
-### Cloud (OpenAI-compatible)
+Cloud (OpenAI-compatible):
 
 ```bash
 export OPENAI_API_KEY="..."
-cargo run --release -- --engine openai
+cargo run --release -- --no-ui --engine openai
 ```
 
 Configure endpoint/model if needed:
 
 ```bash
-cargo run --release -- \
-  --engine openai \
-  --openai-endpoint https://api.openai.com/v1/audio/transcriptions \
-  --openai-translation-endpoint https://api.openai.com/v1/audio/translations \
+cargo run --release -- \\
+  --no-ui \\
+  --engine openai \\
+  --openai-endpoint https://api.openai.com/v1/audio/transcriptions \\
+  --openai-translation-endpoint https://api.openai.com/v1/audio/translations \\
   --openai-model whisper-1
-```
-
-### Headless (no overlay)
-
-```bash
-cargo run --release -- --no-ui
 ```
 
 ## Using the overlay
 
 - Press `Esc` to quit
-- When controls are hidden: click-drag anywhere to move the window
-- When controls are visible: `Alt` + click-drag to move the window
-- Press `S` to show/hide the control bar (includes output language)
+- Drag the top bar to move the window
+- Press `S` to show/hide the control bar (includes output language + sizing)
 
 ## Notes / Limitations
 
@@ -86,6 +94,6 @@ cargo run --release -- --no-ui
 - Some audio may not be capturable (e.g. DRM-protected playback).
 
 ## Good Settings
-  2. cargo run --release -- --engine local --max-window-s 6 --asr-step-ms 600
+  2. cargo run --release -- --no-ui --engine local --max-window-s 6 --asr-step-ms 600
   --input-language <INPUT_LANGUAGE>
       Input language (e.g. `en`, `zh`, `ja`) or `auto`

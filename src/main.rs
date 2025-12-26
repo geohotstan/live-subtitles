@@ -1,13 +1,5 @@
-mod app;
-mod audio;
-mod config;
-mod macos_capture;
-mod streaming;
-mod transcribe;
-mod ui;
-
-use crate::app::run;
-use crate::config::Cli;
+use subtitles::config::Cli;
+use subtitles::run_headless;
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -18,5 +10,5 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = <Cli as clap::Parser>::parse();
-    run(cli)
+    run_headless(cli)
 }

@@ -1,0 +1,16 @@
+[package]
+name = "subtitles-tauri"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+clap = { version = "4.5.23", features = ["derive", "env"] }
+crossbeam-channel = "0.5.13"
+serde = { version = "1.0", features = ["derive"] }
+subtitles = { path = ".." }
+tauri = { version = "2", features = ["macos-private-api"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

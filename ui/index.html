@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subtitles</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="controls-visible">
+    <div id="app">
+      <div id="ambient"></div>
+
+      <div id="drag-strip" data-tauri-drag-region>
+        <span class="drag-title">Subtitles</span>
+      </div>
+
+      <header id="chrome" data-tauri-drag-region>
+        <div class="brand" data-tauri-drag-region>
+          <span class="dot"></span>
+          <span class="name">Subtitles</span>
+          <span class="pill">Live</span>
+        </div>
+
+        <div class="controls" data-tauri-drag-region="false">
+          <div class="segmented" role="tablist" aria-label="Output language">
+            <button type="button" class="seg-btn" data-lang="original">Original</button>
+            <button type="button" class="seg-btn" data-lang="english">English</button>
+          </div>
+
+          <div class="slider" aria-label="Subtitle size">
+            <label for="sizeRange">Size</label>
+            <input id="sizeRange" type="range" min="26" max="78" step="1" />
+          </div>
+
+          <div class="slider" aria-label="Subtitle width">
+            <label for="widthRange">Width</label>
+            <input id="widthRange" type="range" min="55" max="100" step="1" />
+          </div>
+        </div>
+
+        <div class="hint" data-tauri-drag-region>
+          Esc to quit - S to hide controls
+        </div>
+      </header>
+
+      <main id="stage">
+        <div id="caption-wrap">
+          <div id="caption" class="caption idle">Listening...</div>
+        </div>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

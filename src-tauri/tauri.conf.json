@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Subtitles",
+  "version": "0.1.0",
+  "identifier": "com.subtitles.app",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true,
+    "security": {
+      "capabilities": ["main"]
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "Subtitles",
+        "width": 980,
+        "height": 220,
+        "minWidth": 520,
+        "minHeight": 160,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true
+      }
+    ]
+  }
+}

@@ -5,19 +5,13 @@ use std::sync::{
 use std::time::Duration;
 
 use anyhow::Context;
-use parking_lot::Mutex;
+use crossbeam_channel::Sender;
 
 use crate::audio::Segmenter;
 use crate::config::{Cli, Engine, OutputLanguage};
 use crate::macos_capture::start_macos_system_audio_capture;
 use crate::streaming::{Stabilizer, StreamingConfig, StreamingEvent, StreamingSegmenter};
 use crate::transcribe::{OpenAiTranscriber, Transcriber, TranscriberConfig, WhisperLocalTranscriber};
-use crate::ui::run_overlay;
-
-#[derive(Debug, Clone)]
-pub struct SharedCaption {
-    inner: Arc<Mutex<CaptionState>>,
-}
 
 #[derive(Debug, Clone)]
 pub struct SharedOutputLanguage {
@@ -43,31 +37,26 @@ impl SharedOutputLanguage {
     }
 }
 
-#[derive(Debug)]
-struct CaptionState {
-    text: String,
-    updated_at: std::time::Instant,
+#[derive(Debug, Clone)]
+pub enum CaptionEvent {
+    Update { text: String, is_final: bool },
+    Clear,
 }
 
-impl SharedCaption {
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(CaptionState {
-                text: String::new(),
-                updated_at: std::time::Instant::now(),
-            })),
-        }
-    }
+pub struct EngineHandle {
+    pub stop: Arc<AtomicBool>,
+    pub output_language: SharedOutputLanguage,
+    capture_handle: std::thread::JoinHandle<()>,
+    processing_handle: std::thread::JoinHandle<()>,
+    transcription_handle: std::thread::JoinHandle<()>,
+}
 
-    pub fn set_text(&self, text: impl Into<String>) {
-        let mut guard = self.inner.lock();
-        guard.text = text.into();
-        guard.updated_at = std::time::Instant::now();
-    }
-
-    pub fn snapshot(&self) -> (String, std::time::Instant) {
-        let guard = self.inner.lock();
-        (guard.text.clone(), guard.updated_at)
+impl EngineHandle {
+    pub fn stop_and_join(self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.capture_handle.join();
+        let _ = self.processing_handle.join();
+        let _ = self.transcription_handle.join();
     }
 }
 
@@ -80,7 +69,26 @@ fn combine_committed_partial(committed: &str, partial: &str) -> String {
     }
 }
 
-pub fn run(cli: Cli) -> anyhow::Result<()> {
+fn maybe_send_update(
+    caption_tx: &Sender<CaptionEvent>,
+    last_caption: &mut String,
+    last_final: &mut bool,
+    text: String,
+    is_final: bool,
+) {
+    if text != *last_caption || is_final != *last_final {
+        *last_caption = text.clone();
+        *last_final = is_final;
+        if caption_tx
+            .try_send(CaptionEvent::Update { text, is_final })
+            .is_err()
+        {
+            tracing::warn!("caption queue full; dropping update");
+        }
+    }
+}
+
+pub fn start_engine(cli: Cli, caption_tx: Sender<CaptionEvent>) -> anyhow::Result<EngineHandle> {
     #[cfg(not(target_os = "macos"))]
     {
         anyhow::bail!("This MVP only supports macOS for now.");
@@ -89,7 +97,6 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     {
         let stop = Arc::new(AtomicBool::new(false));
-        let captions = SharedCaption::new();
         let output_language = SharedOutputLanguage::new(cli.output_language);
 
         let (audio_tx, audio_rx) = crossbeam_channel::bounded::<Vec<f32>>(256);
@@ -188,15 +195,14 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         let capture_handle = start_macos_system_audio_capture(audio_tx, stop.clone())
             .context("failed to start ScreenCaptureKit audio capture")?;
 
-        let captions_for_worker = captions.clone();
         let output_language_for_worker = output_language.clone();
         let stop_transcribe = stop.clone();
-        let no_ui = cli.no_ui;
         let partial_stable_iters = cli.partial_stable_iters;
 
         let transcription_handle = std::thread::spawn(move || {
             let mut stabilizer = Stabilizer::new(partial_stable_iters);
             let mut last_caption = String::new();
+            let mut last_final = true;
 
             while !stop_transcribe.load(Ordering::Relaxed) {
                 match event_rx.recv_timeout(Duration::from_millis(50)) {
@@ -230,11 +236,15 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
                                 match transcriber.transcribe(&audio, &transcribe_cfg) {
                                     Ok(text) => {
                                         let (committed, partial) = stabilizer.update(&text);
-                                        let display = combine_committed_partial(&committed, &partial);
-                                        if display != last_caption {
-                                            captions_for_worker.set_text(display.clone());
-                                            last_caption = display;
-                                        }
+                                        let display =
+                                            combine_committed_partial(&committed, &partial);
+                                        maybe_send_update(
+                                            &caption_tx,
+                                            &mut last_caption,
+                                            &mut last_final,
+                                            display,
+                                            false,
+                                        );
                                     }
                                     Err(err) => {
                                         tracing::warn!("transcription failed: {err:#}");
@@ -251,11 +261,13 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
                                     Ok(text) => {
                                         let final_text = stabilizer.finalize(&text);
                                         if !final_text.trim().is_empty() {
-                                            captions_for_worker.set_text(final_text.clone());
-                                            last_caption = final_text.clone();
-                                            if no_ui {
-                                                println!("{final_text}");
-                                            }
+                                            maybe_send_update(
+                                                &caption_tx,
+                                                &mut last_caption,
+                                                &mut last_final,
+                                                final_text,
+                                                true,
+                                            );
                                         }
                                     }
                                     Err(err) => {
@@ -266,8 +278,9 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
                             StreamingEvent::Reset => {
                                 stabilizer.reset();
                                 if !last_caption.is_empty() {
-                                    captions_for_worker.set_text(String::new());
                                     last_caption.clear();
+                                    last_final = true;
+                                    let _ = caption_tx.try_send(CaptionEvent::Clear);
                                 }
                             }
                         }
@@ -278,32 +291,46 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
             }
         });
 
-        if cli.no_ui {
-            {
-                let stop = stop.clone();
-                ctrlc::set_handler(move || {
-                    stop.store(true, Ordering::Relaxed);
-                })
-                .context("failed to set Ctrl-C handler")?;
-            }
-
-            while !stop.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        } else {
-            run_overlay(
-                captions.clone(),
-                output_language.clone(),
-                stop.clone(),
-                cli.font_size,
-                cli.overlay_width_frac,
-            )?;
-            stop.store(true, Ordering::Relaxed);
-        }
-
-        let _ = capture_handle.join();
-        let _ = processing_handle.join();
-        let _ = transcription_handle.join();
-        Ok(())
+        Ok(EngineHandle {
+            stop,
+            output_language,
+            capture_handle,
+            processing_handle,
+            transcription_handle,
+        })
     }
+}
+
+pub fn run_headless(cli: Cli) -> anyhow::Result<()> {
+    if !cli.no_ui {
+        anyhow::bail!(
+            "The overlay UI is now provided by the Tauri app. Run the Tauri frontend or pass --no-ui for headless output."
+        );
+    }
+
+    let (caption_tx, caption_rx) = crossbeam_channel::bounded::<CaptionEvent>(64);
+    let engine = start_engine(cli, caption_tx)?;
+    let stop = engine.stop.clone();
+
+    let stop_for_handler = stop.clone();
+    ctrlc::set_handler(move || {
+        stop_for_handler.store(true, Ordering::Relaxed);
+    })
+    .context("failed to set Ctrl-C handler")?;
+
+    while !stop.load(Ordering::Relaxed) {
+        match caption_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(CaptionEvent::Update { text, is_final }) => {
+                if is_final && !text.trim().is_empty() {
+                    println!("{text}");
+                }
+            }
+            Ok(CaptionEvent::Clear) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    engine.stop_and_join();
+    Ok(())
 }

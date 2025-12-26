@@ -47,6 +47,7 @@ pub struct Cli {
     pub output_language: OutputLanguage,
 
     /// Run without the on-screen overlay (prints transcripts to stdout).
+    /// The overlay UI is provided by the Tauri app.
     #[arg(long)]
     pub no_ui: bool,
 

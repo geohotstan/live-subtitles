@@ -35,9 +35,9 @@ fn capture_thread_main(audio_tx: Sender<Vec<f32>>, stop: Arc<AtomicBool>) -> any
         .first()
         .context("no displays found via ScreenCaptureKit")?;
 
-    let filter = SCContentFilter::builder()
-        .display(display)
-        .exclude_windows(&[])
+    let filter = SCContentFilter::create()
+        .with_display(display)
+        .with_excluding_windows(&[])
         .build();
 
     let config = SCStreamConfiguration::new()

@@ -4,17 +4,19 @@ version = "0.1.0"
 edition = "2021"
 build = "build.rs"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1.0.95"
 bytemuck = "1.21.0"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 crossbeam-channel = "0.5.13"
 ctrlc = "3.4.5"
-eframe = { version = "0.29.1", default-features = true }
 hound = "3.5.1"
 parking_lot = "0.12.3"
 reqwest = { version = "0.12.11", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
-screencapturekit = { version = "1.4.1", features = ["macos_15_0"] }
+screencapturekit = { version = "1.5.0", features = ["macos_15_0"] }
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 tracing = "0.1.41"
