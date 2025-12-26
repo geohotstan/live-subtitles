@@ -94,6 +94,10 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = WhisperModelPreset::Medium)]
     pub whisper_model_preset: WhisperModelPreset,
 
+    /// Number of threads to use for local Whisper decoding (defaults to CPU count).
+    #[arg(long)]
+    pub whisper_threads: Option<usize>,
+
     /// OpenAI API key (or set `OPENAI_API_KEY`).
     #[arg(long, env = "OPENAI_API_KEY")]
     pub openai_api_key: Option<String>,

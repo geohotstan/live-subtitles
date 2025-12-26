@@ -84,3 +84,8 @@ cargo run --release -- --no-ui
   - Or disable streaming with `--streaming=false`
 - Default output language is **English** (`--output-language english`).
 - Some audio may not be capturable (e.g. DRM-protected playback).
+
+## Good Settings
+  2. cargo run --release -- --engine local --max-window-s 6 --asr-step-ms 600
+  --input-language <INPUT_LANGUAGE>
+      Input language (e.g. `en`, `zh`, `ja`) or `auto`

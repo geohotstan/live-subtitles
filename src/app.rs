@@ -170,6 +170,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
                 WhisperLocalTranscriber::new(
                     cli.whisper_model.clone(),
                     cli.whisper_model_preset.clone(),
+                    cli.whisper_threads,
                 )
                 .context("failed to initialize local whisper")?,
             ),
@@ -199,14 +200,33 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 
             while !stop_transcribe.load(Ordering::Relaxed) {
                 match event_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(event) => {
-                        let transcribe_cfg = TranscriberConfig {
-                            input_language: input_language.clone(),
-                            output_language: output_language_for_worker.get(),
-                        };
+                    Ok(mut event) => {
+                        // Coalesce queued partials to the newest audio to avoid redundant decode work.
+                        if matches!(event, StreamingEvent::Partial(_)) {
+                            while let Ok(next) = event_rx.try_recv() {
+                                match next {
+                                    StreamingEvent::Partial(audio) => {
+                                        event = StreamingEvent::Partial(audio);
+                                    }
+                                    StreamingEvent::Final(audio) => {
+                                        event = StreamingEvent::Final(audio);
+                                        break;
+                                    }
+                                    StreamingEvent::Reset => {
+                                        event = StreamingEvent::Reset;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
 
                         match event {
                             StreamingEvent::Partial(audio) => {
+                                let transcribe_cfg = TranscriberConfig {
+                                    input_language: input_language.clone(),
+                                    output_language: output_language_for_worker.get(),
+                                    is_partial: true,
+                                };
                                 match transcriber.transcribe(&audio, &transcribe_cfg) {
                                     Ok(text) => {
                                         let (committed, partial) = stabilizer.update(&text);
@@ -222,6 +242,11 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
                                 }
                             }
                             StreamingEvent::Final(audio) => {
+                                let transcribe_cfg = TranscriberConfig {
+                                    input_language: input_language.clone(),
+                                    output_language: output_language_for_worker.get(),
+                                    is_partial: false,
+                                };
                                 match transcriber.transcribe(&audio, &transcribe_cfg) {
                                     Ok(text) => {
                                         let final_text = stabilizer.finalize(&text);

@@ -9,6 +9,7 @@ pub use openai::OpenAiTranscriber;
 pub struct TranscriberConfig {
     pub input_language: Option<String>,
     pub output_language: crate::config::OutputLanguage,
+    pub is_partial: bool,
 }
 
 pub trait Transcriber: Send {
