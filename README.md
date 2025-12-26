@@ -23,7 +23,7 @@ This repo is an MVP focused on **macOS 15 (Sequoia) and newer**.
 cargo run --release -- --engine local
 ```
 
-To download a specific model preset (`tiny`, `base`, `small`, `medium`, `large`):
+Default preset is `medium`. To download a smaller model:
 
 ```bash
 cargo run --release -- --engine local --whisper-model-preset tiny
@@ -32,7 +32,13 @@ cargo run --release -- --engine local --whisper-model-preset tiny
 To use an existing model file:
 
 ```bash
-cargo run --release -- --engine local --whisper-model /path/to/ggml-base.bin
+cargo run --release -- --engine local --whisper-model /path/to/ggml-medium.bin
+
+To use large v3:
+
+```bash
+cargo run --release -- --engine local --whisper-model-preset large-v3
+```
 ```
 
 ### Cloud (OpenAI-compatible)
@@ -70,5 +76,16 @@ cargo run --release -- --no-ui
 - Audio is segmented by a simple energy-based VAD. If it misses speech, tweak:
   - `--vad-threshold`
   - `--vad-end-silence-s`
+- Local mode now emits streaming partials by default (OpenAI mode stays segment-based). You can tune latency/stability with:
+  - `--asr-step-ms`
+  - `--max-window-s`
+  - `--partial-stable-iters`
+  - `--min-speech-ms`
+  - Or disable streaming with `--streaming=false`
 - Default output language is **English** (`--output-language english`).
 - Some audio may not be capturable (e.g. DRM-protected playback).
+
+## Good Settings
+  2. cargo run --release -- --engine local --max-window-s 6 --asr-step-ms 600
+  --input-language <INPUT_LANGUAGE>
+      Input language (e.g. `en`, `zh`, `ja`) or `auto`

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
+use clap::{ArgAction, Parser, ValueEnum};
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum Engine {
@@ -27,7 +27,8 @@ pub enum WhisperModelPreset {
     Base,
     Small,
     Medium,
-    Large,
+    #[value(name = "large-v3", alias = "largev3", alias = "large_v3")]
+    LargeV3,
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -49,6 +50,10 @@ pub struct Cli {
     #[arg(long)]
     pub no_ui: bool,
 
+    /// Enable low-latency streaming partials (local engine only).
+    #[arg(long, default_value_t = true, action = ArgAction::Set)]
+    pub streaming: bool,
+
     /// VAD threshold (RMS) for speech detection.
     #[arg(long, default_value_t = 0.012)]
     pub vad_threshold: f32,
@@ -65,13 +70,33 @@ pub struct Cli {
     #[arg(long, default_value_t = 0.25)]
     pub pre_roll_s: f32,
 
+    /// Minimum speech duration (ms) before emitting partials/finals.
+    #[arg(long, default_value_t = 300)]
+    pub min_speech_ms: u64,
+
+    /// How often (ms) to run ASR while speech is active.
+    #[arg(long, default_value_t = 350)]
+    pub asr_step_ms: u64,
+
+    /// Maximum audio window (seconds) for partial decoding (0 = full segment).
+    #[arg(long, default_value_t = 12.0)]
+    pub max_window_s: f32,
+
+    /// Partial stability: how many consecutive updates a token must survive to be committed.
+    #[arg(long, default_value_t = 2)]
+    pub partial_stable_iters: usize,
+
     /// Local whisper model file path. If omitted, a model will be downloaded.
     #[arg(long)]
     pub whisper_model: Option<PathBuf>,
 
     /// Local model preset to download when `--whisper-model` is not provided.
-    #[arg(long, value_enum, default_value_t = WhisperModelPreset::Base)]
+    #[arg(long, value_enum, default_value_t = WhisperModelPreset::Medium)]
     pub whisper_model_preset: WhisperModelPreset,
+
+    /// Number of threads to use for local Whisper decoding (defaults to CPU count).
+    #[arg(long)]
+    pub whisper_threads: Option<usize>,
 
     /// OpenAI API key (or set `OPENAI_API_KEY`).
     #[arg(long, env = "OPENAI_API_KEY")]

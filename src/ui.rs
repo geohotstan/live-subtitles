@@ -77,10 +77,21 @@ impl eframe::App for OverlayApp {
             self.show_controls = !self.show_controls;
         }
 
+        let resize_dir = resize_direction(ctx, 8.0);
+        if let Some(dir) = resize_dir {
+            ctx.set_cursor_icon(cursor_for_resize(dir));
+            if ctx.input(|i| i.pointer.primary_pressed()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+                return;
+            }
+        }
+
         // Allow dragging the window by clicking anywhere.
         // When the control bar is visible, require `Alt` to avoid fighting with UI widgets.
         if ctx.input(|i| {
-            i.pointer.primary_pressed() && (!self.show_controls || i.modifiers.alt)
+            i.pointer.primary_pressed()
+                && resize_dir.is_none()
+                && (!self.show_controls || i.modifiers.alt)
         }) {
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
@@ -260,4 +271,47 @@ fn layout_text_fit(
         egui::Color32::WHITE,
         wrap_width,
     )
+}
+
+fn resize_direction(
+    ctx: &egui::Context,
+    margin: f32,
+) -> Option<egui::viewport::ResizeDirection> {
+    let pos = ctx.input(|i| i.pointer.hover_pos())?;
+    let rect = ctx.screen_rect();
+    if !rect.contains(pos) {
+        return None;
+    }
+
+    let left = pos.x <= rect.left() + margin;
+    let right = pos.x >= rect.right() - margin;
+    let top = pos.y <= rect.top() + margin;
+    let bottom = pos.y >= rect.bottom() - margin;
+
+    use egui::viewport::ResizeDirection::*;
+    match (left, right, top, bottom) {
+        (true, _, true, _) => Some(NorthWest),
+        (_, true, true, _) => Some(NorthEast),
+        (true, _, _, true) => Some(SouthWest),
+        (_, true, _, true) => Some(SouthEast),
+        (true, _, _, _) => Some(West),
+        (_, true, _, _) => Some(East),
+        (_, _, true, _) => Some(North),
+        (_, _, _, true) => Some(South),
+        _ => None,
+    }
+}
+
+fn cursor_for_resize(dir: egui::viewport::ResizeDirection) -> egui::CursorIcon {
+    use egui::viewport::ResizeDirection::*;
+    match dir {
+        North => egui::CursorIcon::ResizeNorth,
+        South => egui::CursorIcon::ResizeSouth,
+        East => egui::CursorIcon::ResizeEast,
+        West => egui::CursorIcon::ResizeWest,
+        NorthEast => egui::CursorIcon::ResizeNorthEast,
+        NorthWest => egui::CursorIcon::ResizeNorthWest,
+        SouthEast => egui::CursorIcon::ResizeSouthEast,
+        SouthWest => egui::CursorIcon::ResizeSouthWest,
+    }
 }

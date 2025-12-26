@@ -9,7 +9,7 @@ use crate::transcribe::model_download::resolve_whisper_model_path;
 use crate::transcribe::{Transcriber, TranscriberConfig};
 
 pub struct WhisperLocalTranscriber {
-    ctx: WhisperContext,
+    state: whisper_rs::WhisperState,
     n_threads: i32,
 }
 
@@ -17,6 +17,7 @@ impl WhisperLocalTranscriber {
     pub fn new(
         model_path: Option<PathBuf>,
         preset: WhisperModelPreset,
+        whisper_threads: Option<usize>,
     ) -> anyhow::Result<Self> {
         let model_path = resolve_whisper_model_path(model_path, preset)?;
         tracing::info!("loading whisper model: {}", model_path.display());
@@ -29,12 +30,16 @@ impl WhisperLocalTranscriber {
         )
         .context("failed to load whisper model")?;
 
-        let n_threads = std::thread::available_parallelism()
-            .map(|n| n.get() as i32)
-            .unwrap_or(4)
-            .clamp(1, 8);
+        let state = ctx.create_state().context("failed to create state")?;
 
-        Ok(Self { ctx, n_threads })
+        let max_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let n_threads = whisper_threads
+            .unwrap_or(max_threads)
+            .clamp(1, max_threads) as i32;
+
+        Ok(Self { state, n_threads })
     }
 }
 
@@ -48,7 +53,6 @@ impl Transcriber for WhisperLocalTranscriber {
             return Ok(String::new());
         }
 
-        let mut state = self.ctx.create_state().context("failed to create state")?;
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 0 });
 
         params.set_n_threads(self.n_threads);
@@ -58,17 +62,22 @@ impl Transcriber for WhisperLocalTranscriber {
         // and returns early (no transcription). Auto-detection for transcription/translation
         // is done by passing `language=None` or `language="auto"`.
         params.set_language(cfg.input_language.as_deref());
+        params.set_no_timestamps(true);
+        params.set_single_segment(cfg.is_partial);
+        if cfg.is_partial {
+            params.set_no_context(true);
+        }
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
 
-        state
+        self.state
             .full(params, audio_16k_mono)
             .context("whisper inference failed")?;
 
         let mut out = String::new();
-        for seg in state.as_iter() {
+        for seg in self.state.as_iter() {
             let s = seg.to_string();
             let s = s.trim();
             if s.is_empty() {

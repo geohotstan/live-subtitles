@@ -33,7 +33,7 @@ pub fn resolve_whisper_model_path(
             "ggml-medium.bin",
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
         ),
-        WhisperModelPreset::Large => (
+        WhisperModelPreset::LargeV3 => (
             "ggml-large-v3.bin",
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
         ),
