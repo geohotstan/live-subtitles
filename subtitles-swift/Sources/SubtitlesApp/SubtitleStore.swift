@@ -14,7 +14,7 @@ final class SubtitleStore: ObservableObject {
     @Published var partialOriginal: String = ""
     @Published var partialEnglish: String = ""
     @Published var partialChinese: String = ""
-    @Published var statusMessage: String? = "Starting…"
+    @Published var statusMessage: String? = "Ready."
 
     private let maxHistory: Int
 

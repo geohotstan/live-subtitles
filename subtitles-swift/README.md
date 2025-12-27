@@ -18,6 +18,8 @@ Native macOS subtitles overlay for **system audio** using:
 swift run
 ```
 
+On launch, the app runs in the **menu bar**. Use the menu to start/stop the subtitles overlay and open Settings.
+
 ## Build an app bundle
 
 ```bash
@@ -44,6 +46,7 @@ When `--input-language` or `--input-locale` is supplied, translation will use th
 ## Shortcuts
 
 - `Ctrl + Q`: quit the app
+- `⌘ ,`: open Preferences
 
 ## Notes
 

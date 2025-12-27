@@ -3,85 +3,257 @@ import SwiftUI
 
 @MainActor
 final class SubtitlesApp: NSObject, NSApplicationDelegate {
-    private let config = AppConfig.load()
+    private var statusItem: NSStatusItem?
+    private var startStopItem: NSMenuItem?
+    private var settingsObserver: NSObjectProtocol?
+    private var keyMonitor: Any?
+    private var localKeyMonitor: Any?
+
+    private var overlayWindow: NSWindow?
+    private var preferencesWindow: NSWindow?
+    private var engine: SubtitleEngine?
+
+    private var config: AppConfig
     private let store: SubtitleStore
     private let translator: TranslationBroker
-    private var engine: SubtitleEngine?
-    private var window: NSWindow?
-    private var keyMonitor: Any?
+
+    private var isRunning = false
 
     override init() {
+        let config = AppConfig.load()
+        self.config = config
         self.store = SubtitleStore(maxHistory: config.maxHistory)
         self.translator = TranslationBroker(store: store)
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        setupWindow()
-        engine = SubtitleEngine(config: config, store: store, translator: translator)
-        Task { @MainActor in
-            await engine?.start()
-        }
+        setupStatusItem()
+        installQuitKeyHandler()
+        observeSettingsChanges()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
+        }
+        removeQuitKeyHandler()
         Task { @MainActor in
-            await engine?.stop()
+            await stopSubtitles()
         }
     }
 
-    private func setupWindow() {
-        NSApp.setActivationPolicy(.regular)
-        let screenFrame = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
-        let width = min(1000, screenFrame.width * 0.9)
-        let height: CGFloat = 260
-        let originX = screenFrame.midX - width / 2.0
-        let originY = screenFrame.minY + 40
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
 
-        let styleMask: NSWindow.StyleMask = config.debugOverlay
-            ? [.titled, .closable, .resizable, .miniaturizable]
-            : [.borderless, .resizable]
+    private func setupStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            if let image = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "Subtitles") {
+                image.isTemplate = true
+                button.image = image
+            } else {
+                button.title = "Subtitles"
+            }
+            button.toolTip = "Subtitles"
+        }
+
+        let menu = NSMenu()
+        let startStop = NSMenuItem(title: "Start Subtitles", action: #selector(toggleSubtitles), keyEquivalent: "")
+        startStop.target = self
+        menu.addItem(startStop)
+        menu.addItem(.separator())
+
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openPreferences), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+
+        let about = NSMenuItem(title: "About Subtitles", action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
+        menu.addItem(about)
+        menu.addItem(.separator())
+
+        let quit = NSMenuItem(title: "Quit Subtitles", action: #selector(quitApp), keyEquivalent: "q")
+        quit.keyEquivalentModifierMask = [.control]
+        quit.target = self
+        menu.addItem(quit)
+
+        item.menu = menu
+        statusItem = item
+        startStopItem = startStop
+        updateMenuState()
+    }
+
+    private func observeSettingsChanges() {
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.reloadConfigAndRestartIfNeeded()
+            }
+        }
+    }
+
+    private func reloadConfigAndRestartIfNeeded() {
+        config = AppConfig.load()
+        if isRunning {
+            Task { @MainActor in
+                await restartSubtitles()
+            }
+        }
+    }
+
+    @objc private func toggleSubtitles() {
+        if isRunning {
+            Task { @MainActor in
+                await stopSubtitles()
+            }
+        } else {
+            Task { @MainActor in
+                await startSubtitles()
+            }
+        }
+    }
+
+    @objc private func openPreferences() {
+        if preferencesWindow == nil {
+            preferencesWindow = makePreferencesWindow()
+        }
+        preferencesWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
+    }
+
+    private func updateMenuState() {
+        startStopItem?.title = isRunning ? "Stop Subtitles" : "Start Subtitles"
+        startStopItem?.state = isRunning ? .on : .off
+    }
+
+    @MainActor
+    private func startSubtitles() async {
+        guard !isRunning else { return }
+        isRunning = true
+        updateMenuState()
+
+        resetStore()
+        buildOverlayWindow()
+
+        let engine = SubtitleEngine(config: config, store: store, translator: translator)
+        self.engine = engine
+        await engine.start()
+    }
+
+    @MainActor
+    private func stopSubtitles() async {
+        guard isRunning else { return }
+        isRunning = false
+        updateMenuState()
+
+        if let engine {
+            await engine.stop()
+        }
+        engine = nil
+
+        overlayWindow?.orderOut(nil)
+        overlayWindow = nil
+        store.updateStatus("Stopped.")
+    }
+
+    @MainActor
+    private func restartSubtitles() async {
+        await stopSubtitles()
+        await startSubtitles()
+    }
+
+    @MainActor
+    private func resetStore() {
+        store.lines.removeAll()
+        store.partialOriginal = ""
+        store.partialEnglish = ""
+        store.partialChinese = ""
+        store.updateStatus("Starting…")
+    }
+
+    @MainActor
+    private func buildOverlayWindow() {
+        guard let screen = NSScreen.main else { return }
+        let frame = screen.frame
+        let height = min(260, frame.height * 0.3)
+        let rect = NSRect(x: frame.minX, y: frame.minY, width: frame.width, height: height)
 
         let window = NSWindow(
-            contentRect: CGRect(x: originX, y: originY, width: width, height: height),
-            styleMask: styleMask,
+            contentRect: rect,
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-
-        if config.debugOverlay {
-            window.isOpaque = true
-            window.backgroundColor = NSColor.windowBackgroundColor
-            window.level = .normal
-            window.hasShadow = true
-            window.title = "Subtitles (Debug)"
-            window.center()
-        } else {
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            window.level = .floating
-            window.hasShadow = false
-            window.isMovableByWindowBackground = true
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-            window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
-        }
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.level = .statusBar
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        window.ignoresMouseEvents = true
+        window.isReleasedWhenClosed = false
 
         let view = SubtitlesView(store: store, translator: translator, config: config)
         window.contentView = NSHostingView(rootView: view)
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
-        self.window = window
 
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+        overlayWindow = window
+        window.orderFrontRegardless()
+    }
+
+    @MainActor
+    private func makePreferencesWindow() -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 520),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Subtitles Settings"
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.contentView = NSHostingView(rootView: PreferencesView())
+        return window
+    }
+
+    private func installQuitKeyHandler() {
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.modifierFlags.contains(.control),
-               let chars = event.charactersIgnoringModifiers?.lowercased(),
-               chars == "q" {
-                NSApp.terminate(nil)
+               event.charactersIgnoringModifiers?.lowercased() == "q" {
+                self?.quitApp()
                 return nil
             }
             return event
         }
+
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.modifierFlags.contains(.control),
+               event.charactersIgnoringModifiers?.lowercased() == "q" {
+                self?.quitApp()
+            }
+        }
+    }
+
+    private func removeQuitKeyHandler() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+        }
+        if let localKeyMonitor {
+            NSEvent.removeMonitor(localKeyMonitor)
+        }
+        keyMonitor = nil
+        localKeyMonitor = nil
     }
 }

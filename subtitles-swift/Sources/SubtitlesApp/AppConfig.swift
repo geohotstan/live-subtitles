@@ -21,6 +21,7 @@ struct AppConfig {
     static func load() -> AppConfig {
         let args = CommandLine.arguments
         let env = ProcessInfo.processInfo.environment
+        let defaults = UserDefaults.standard
 
         func argValue(_ name: String) -> String? {
             guard let idx = args.firstIndex(of: name), idx + 1 < args.count else { return nil }
@@ -31,8 +32,13 @@ struct AppConfig {
             args.contains(name)
         }
 
-        let inputLanguage = argValue("--input-language") ?? env["SUBTITLES_INPUT_LANGUAGE"]
-        let inputLocaleArg = argValue("--input-locale") ?? env["SUBTITLES_INPUT_LOCALE"]
+        let rawInputLanguage = argValue("--input-language")
+            ?? env["SUBTITLES_INPUT_LANGUAGE"]
+            ?? defaults.string(forKey: "subtitles.inputLanguage")
+        let inputLanguage = (rawInputLanguage?.lowercased() == "auto") ? nil : rawInputLanguage
+        let inputLocaleArg = argValue("--input-locale")
+            ?? env["SUBTITLES_INPUT_LOCALE"]
+            ?? defaults.string(forKey: "subtitles.inputLocale")
         let hasExplicitInput = inputLanguage != nil || inputLocaleArg != nil
         let inputLocaleId = inputLocaleArg
             ?? mapLanguageToLocale(inputLanguage)
@@ -40,18 +46,42 @@ struct AppConfig {
 
         let maxHistory = Int(argValue("--max-history") ?? "2") ?? 2
         let partialDebounceMs = Double(argValue("--partial-debounce-ms") ?? "200") ?? 200
-        let outputMode = OutputMode.parse(argValue("--output-mode") ?? env["SUBTITLES_OUTPUT_MODE"])
-        let outputSampleRate = Double(argValue("--output-sample-rate") ?? env["SUBTITLES_OUTPUT_SAMPLE_RATE"] ?? "16000") ?? 16000
-        let outputChannelsValue = Int(argValue("--output-channels") ?? env["SUBTITLES_OUTPUT_CHANNELS"] ?? "1") ?? 1
-        let audioGain = Float(argValue("--audio-gain") ?? env["SUBTITLES_AUDIO_GAIN"] ?? "1.0") ?? 1.0
+        let outputMode = OutputMode.parse(
+            argValue("--output-mode")
+                ?? env["SUBTITLES_OUTPUT_MODE"]
+                ?? defaults.string(forKey: "subtitles.outputMode")
+        )
+        let outputSampleRate = Double(
+            argValue("--output-sample-rate")
+                ?? env["SUBTITLES_OUTPUT_SAMPLE_RATE"]
+                ?? defaults.string(forKey: "subtitles.outputSampleRate")
+                ?? "16000"
+        ) ?? 16000
+        let outputChannelsValue = Int(
+            argValue("--output-channels")
+                ?? env["SUBTITLES_OUTPUT_CHANNELS"]
+                ?? defaults.string(forKey: "subtitles.outputChannels")
+                ?? "1"
+        ) ?? 1
+        let audioGain = Float(
+            argValue("--audio-gain")
+                ?? env["SUBTITLES_AUDIO_GAIN"]
+                ?? defaults.string(forKey: "subtitles.audioGain")
+                ?? "1.0"
+        ) ?? 1.0
 
-        let excludeSelfAudio = !flag("--include-self-audio")
-        let preferOnDevice = !flag("--allow-cloud-recognition")
-        let debugOverlay = flag("--debug-overlay") || (env["SUBTITLES_DEBUG_OVERLAY"] == "1")
+        let includeSelfAudio = flag("--include-self-audio") || defaults.bool(forKey: "subtitles.includeSelfAudio")
+        let allowCloud = flag("--allow-cloud-recognition") || defaults.bool(forKey: "subtitles.allowCloudRecognition")
+        let debugOverlay = flag("--debug-overlay")
+            || (env["SUBTITLES_DEBUG_OVERLAY"] == "1")
+            || defaults.bool(forKey: "subtitles.debugOverlay")
+
+        let excludeSelfAudio = !includeSelfAudio
+        let preferOnDevice = !allowCloud
 
         let inputLocale = Locale(identifier: inputLocaleId)
         let translationSourceLanguage = hasExplicitInput
-            ? Locale.Language(identifier: mapLanguageToLanguageIdentifier(inputLanguage) ?? inputLocale.languageCode ?? inputLocaleId)
+            ? Locale.Language(identifier: mapLanguageToLanguageIdentifier(inputLanguage) ?? inputLocale.language.languageCode?.identifier ?? inputLocaleId)
             : nil
 
         return AppConfig(
