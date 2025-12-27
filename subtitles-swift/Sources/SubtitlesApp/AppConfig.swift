@@ -14,6 +14,7 @@ struct AppConfig {
     let captureChannelCount: Int
     let outputSampleRate: Double
     let outputChannels: AVAudioChannelCount
+    let audioGain: Float
     let preferOnDeviceRecognition: Bool
     let debugOverlay: Bool
 
@@ -40,6 +41,9 @@ struct AppConfig {
         let maxHistory = Int(argValue("--max-history") ?? "2") ?? 2
         let partialDebounceMs = Double(argValue("--partial-debounce-ms") ?? "200") ?? 200
         let outputMode = OutputMode.parse(argValue("--output-mode") ?? env["SUBTITLES_OUTPUT_MODE"])
+        let outputSampleRate = Double(argValue("--output-sample-rate") ?? env["SUBTITLES_OUTPUT_SAMPLE_RATE"] ?? "16000") ?? 16000
+        let outputChannelsValue = Int(argValue("--output-channels") ?? env["SUBTITLES_OUTPUT_CHANNELS"] ?? "1") ?? 1
+        let audioGain = Float(argValue("--audio-gain") ?? env["SUBTITLES_AUDIO_GAIN"] ?? "1.0") ?? 1.0
 
         let excludeSelfAudio = !flag("--include-self-audio")
         let preferOnDevice = !flag("--allow-cloud-recognition")
@@ -61,8 +65,9 @@ struct AppConfig {
             excludesCurrentProcessAudio: excludeSelfAudio,
             captureSampleRate: 48_000,
             captureChannelCount: 2,
-            outputSampleRate: 16_000,
-            outputChannels: 1,
+            outputSampleRate: outputSampleRate,
+            outputChannels: AVAudioChannelCount(max(1, outputChannelsValue)),
+            audioGain: max(0.1, min(4.0, audioGain)),
             preferOnDeviceRecognition: preferOnDevice,
             debugOverlay: debugOverlay
         )

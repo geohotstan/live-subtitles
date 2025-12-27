@@ -30,6 +30,9 @@ open build/Subtitles.app
 - `--input-locale <id>`: input speech locale, e.g. `ja-JP`, `zh-CN`, `en-US`
 - `--input-language <name>`: shorthand for locale (e.g. `japanese`, `english`, `chinese`)
 - `--output-mode <mode>`: `english`, `chinese`, `english-chinese`, `original`, `bilingual` (default: bilingual)
+- `--output-sample-rate <hz>`: override resample rate (default: 16000)
+- `--output-channels <n>`: override output channels (default: 1)
+- `--audio-gain <x>`: boost audio before recognition (default: 1.0, range ~0.1–4.0)
 
 When `--input-language` or `--input-locale` is supplied, translation will use that language as the fixed source (no auto-detect).
 - `--max-history <n>`: number of recent finalized subtitle cards to show (default: 2)
@@ -46,3 +49,6 @@ When `--input-language` or `--input-locale` is supplied, translation will use th
 
 - Translation relies on Apple on-device models. If a language pair is missing, macOS may prompt to download it.
 - Some audio is not capturable (e.g. DRM-protected playback).
+
+## Best Settings
+- swift run subtitles-swift -- --input-language japanese --output-mode english --output-sample-rate 48000 --audio-gain 4.0

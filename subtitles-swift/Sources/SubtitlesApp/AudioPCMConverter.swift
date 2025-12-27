@@ -3,12 +3,14 @@ import CoreMedia
 
 final class AudioPCMConverter {
     private let outputFormat: AVAudioFormat
+    private let gain: Float
     private var converter: AVAudioConverter?
     private var inputFormat: AVAudioFormat?
     private let lock = NSLock()
 
-    init(outputSampleRate: Double, outputChannels: AVAudioChannelCount) {
+    init(outputSampleRate: Double, outputChannels: AVAudioChannelCount, gain: Float) {
         self.outputFormat = AVAudioFormat(standardFormatWithSampleRate: outputSampleRate, channels: outputChannels)!
+        self.gain = gain
     }
 
     func convert(sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
@@ -19,6 +21,7 @@ final class AudioPCMConverter {
 
     private func resampleIfNeeded(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
         if buffer.format.isEqual(outputFormat) {
+            applyGain(to: buffer)
             return buffer
         }
 
@@ -48,6 +51,7 @@ final class AudioPCMConverter {
         if error != nil {
             return nil
         }
+        applyGain(to: outputBuffer)
         return outputBuffer
     }
 
@@ -107,5 +111,21 @@ final class AudioPCMConverter {
         }
 
         return buffer
+    }
+
+    private func applyGain(to buffer: AVAudioPCMBuffer) {
+        guard gain != 1.0 else { return }
+        guard buffer.format.commonFormat == .pcmFormatFloat32 else { return }
+        guard let channels = buffer.floatChannelData else { return }
+
+        let channelCount = Int(buffer.format.channelCount)
+        let frameLength = Int(buffer.frameLength)
+        for channel in 0..<channelCount {
+            let samples = channels[channel]
+            for frame in 0..<frameLength {
+                let value = samples[frame] * gain
+                samples[frame] = max(-1.0, min(1.0, value))
+            }
+        }
     }
 }

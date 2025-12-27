@@ -18,7 +18,11 @@ final class SubtitleEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         self.config = config
         self.store = store
         self.translator = translator
-        self.converter = AudioPCMConverter(outputSampleRate: config.outputSampleRate, outputChannels: config.outputChannels)
+        self.converter = AudioPCMConverter(
+            outputSampleRate: config.outputSampleRate,
+            outputChannels: config.outputChannels,
+            gain: config.audioGain
+        )
         super.init()
     }
 
