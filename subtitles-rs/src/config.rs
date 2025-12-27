@@ -15,10 +15,22 @@ pub enum Engine {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputLanguage {
-    /// Show subtitles in the original language.
-    Original,
+    /// Show subtitles in Chinese (assumes the input is Chinese).
+    #[value(
+        name = "chinese",
+        alias = "zh",
+        alias = "zh-cn",
+        alias = "zh-hans",
+        alias = "cn",
+        alias = "original"
+    )]
+    Chinese,
     /// Show subtitles in English.
+    #[value(name = "english", alias = "en")]
     English,
+    /// Show subtitles in both Chinese and English (original + English translation).
+    #[value(name = "bilingual", alias = "bi", alias = "zh-en", alias = "en-zh")]
+    Bilingual,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -42,7 +54,7 @@ pub struct Cli {
     #[arg(long, alias = "language", default_value = "auto")]
     pub input_language: String,
 
-    /// Output language (can be changed live in the overlay UI).
+    /// Output language (English, Chinese, or bilingual; can be changed live in the overlay UI).
     #[arg(long, value_enum, default_value_t = OutputLanguage::English)]
     pub output_language: OutputLanguage,
 

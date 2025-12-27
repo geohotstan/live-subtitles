@@ -1,5 +1,10 @@
-/target/
-/models/
+subtitles-rs/target/
+subtitles-rs/models/
+subtitles-swift/.build/
+subtitles-swift/build/
+subtitles-swift/*.xcodeproj/
+subtitles-swift/*.xcworkspace/
+subtitles-swift/.swiftpm/
 .DS_Store
 **/*.rs.bk
 target/

@@ -27,8 +27,9 @@ impl SharedOutputLanguage {
 
     pub fn get(&self) -> OutputLanguage {
         match self.inner.load(Ordering::Relaxed) {
-            0 => OutputLanguage::Original,
-            _ => OutputLanguage::English,
+            0 => OutputLanguage::Chinese,
+            1 => OutputLanguage::English,
+            _ => OutputLanguage::Bilingual,
         }
     }
 
@@ -66,6 +67,48 @@ fn combine_committed_partial(committed: &str, partial: &str) -> String {
         (false, true) => committed.trim().to_string(),
         (true, false) => partial.trim().to_string(),
         (false, false) => format!("{} {}", committed.trim(), partial.trim()),
+    }
+}
+
+fn normalize_for_compare(s: &str) -> String {
+    s.trim().to_lowercase()
+}
+
+fn merge_bilingual(primary: &str, secondary: &str) -> String {
+    let primary = primary.trim();
+    let secondary = secondary.trim();
+    match (primary.is_empty(), secondary.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => primary.to_string(),
+        (true, false) => secondary.to_string(),
+        (false, false) => {
+            if normalize_for_compare(primary) == normalize_for_compare(secondary) {
+                primary.to_string()
+            } else {
+                format!("{primary}\n{secondary}")
+            }
+        }
+    }
+}
+
+fn transcribe_text(
+    transcriber: &mut dyn Transcriber,
+    input_language: &Option<String>,
+    output_language: OutputLanguage,
+    is_partial: bool,
+    audio: &[f32],
+) -> Option<String> {
+    let cfg = TranscriberConfig {
+        input_language: input_language.clone(),
+        output_language,
+        is_partial,
+    };
+    match transcriber.transcribe(audio, &cfg) {
+        Ok(text) => Some(text),
+        Err(err) => {
+            tracing::warn!("transcription failed: {err:#}");
+            None
+        }
     }
 }
 
@@ -200,9 +243,11 @@ pub fn start_engine(cli: Cli, caption_tx: Sender<CaptionEvent>) -> anyhow::Resul
         let partial_stable_iters = cli.partial_stable_iters;
 
         let transcription_handle = std::thread::spawn(move || {
-            let mut stabilizer = Stabilizer::new(partial_stable_iters);
+            let mut stabilizer_primary = Stabilizer::new(partial_stable_iters);
+            let mut stabilizer_secondary = Stabilizer::new(partial_stable_iters);
             let mut last_caption = String::new();
             let mut last_final = true;
+            let mut last_mode = output_language_for_worker.get();
 
             while !stop_transcribe.load(Ordering::Relaxed) {
                 match event_rx.recv_timeout(Duration::from_millis(50)) {
@@ -226,57 +271,128 @@ pub fn start_engine(cli: Cli, caption_tx: Sender<CaptionEvent>) -> anyhow::Resul
                             }
                         }
 
+                        let mode = output_language_for_worker.get();
+                        if mode != last_mode {
+                            stabilizer_primary.reset();
+                            stabilizer_secondary.reset();
+                            last_mode = mode;
+                            if !last_caption.is_empty() {
+                                last_caption.clear();
+                                last_final = true;
+                                let _ = caption_tx.try_send(CaptionEvent::Clear);
+                            }
+                        }
+
                         match event {
                             StreamingEvent::Partial(audio) => {
-                                let transcribe_cfg = TranscriberConfig {
-                                    input_language: input_language.clone(),
-                                    output_language: output_language_for_worker.get(),
-                                    is_partial: true,
-                                };
-                                match transcriber.transcribe(&audio, &transcribe_cfg) {
-                                    Ok(text) => {
-                                        let (committed, partial) = stabilizer.update(&text);
-                                        let display =
-                                            combine_committed_partial(&committed, &partial);
+                                if mode == OutputLanguage::Bilingual {
+                                    let original = transcribe_text(
+                                        transcriber.as_mut(),
+                                        &input_language,
+                                        OutputLanguage::Chinese,
+                                        true,
+                                        &audio,
+                                    )
+                                    .unwrap_or_default();
+                                    let english = transcribe_text(
+                                        transcriber.as_mut(),
+                                        &input_language,
+                                        OutputLanguage::English,
+                                        true,
+                                        &audio,
+                                    )
+                                    .unwrap_or_default();
+
+                                    let (committed_primary, partial_primary) =
+                                        stabilizer_primary.update(&original);
+                                    let (committed_secondary, partial_secondary) =
+                                        stabilizer_secondary.update(&english);
+
+                                    let line_primary =
+                                        combine_committed_partial(&committed_primary, &partial_primary);
+                                    let line_secondary =
+                                        combine_committed_partial(&committed_secondary, &partial_secondary);
+
+                                    let display = merge_bilingual(&line_primary, &line_secondary);
+                                    maybe_send_update(
+                                        &caption_tx,
+                                        &mut last_caption,
+                                        &mut last_final,
+                                        display,
+                                        false,
+                                    );
+                                } else if let Some(text) = transcribe_text(
+                                    transcriber.as_mut(),
+                                    &input_language,
+                                    mode,
+                                    true,
+                                    &audio,
+                                ) {
+                                    let (committed, partial) = stabilizer_primary.update(&text);
+                                    let display = combine_committed_partial(&committed, &partial);
+                                    maybe_send_update(
+                                        &caption_tx,
+                                        &mut last_caption,
+                                        &mut last_final,
+                                        display,
+                                        false,
+                                    );
+                                }
+                            }
+                            StreamingEvent::Final(audio) => {
+                                if mode == OutputLanguage::Bilingual {
+                                    let original = transcribe_text(
+                                        transcriber.as_mut(),
+                                        &input_language,
+                                        OutputLanguage::Chinese,
+                                        false,
+                                        &audio,
+                                    )
+                                    .unwrap_or_default();
+                                    let english = transcribe_text(
+                                        transcriber.as_mut(),
+                                        &input_language,
+                                        OutputLanguage::English,
+                                        false,
+                                        &audio,
+                                    )
+                                    .unwrap_or_default();
+
+                                    let final_primary = stabilizer_primary.finalize(&original);
+                                    let final_secondary = stabilizer_secondary.finalize(&english);
+                                    let final_text = merge_bilingual(&final_primary, &final_secondary);
+
+                                    if !final_text.trim().is_empty() {
                                         maybe_send_update(
                                             &caption_tx,
                                             &mut last_caption,
                                             &mut last_final,
-                                            display,
-                                            false,
+                                            final_text,
+                                            true,
                                         );
                                     }
-                                    Err(err) => {
-                                        tracing::warn!("transcription failed: {err:#}");
-                                    }
-                                }
-                            }
-                            StreamingEvent::Final(audio) => {
-                                let transcribe_cfg = TranscriberConfig {
-                                    input_language: input_language.clone(),
-                                    output_language: output_language_for_worker.get(),
-                                    is_partial: false,
-                                };
-                                match transcriber.transcribe(&audio, &transcribe_cfg) {
-                                    Ok(text) => {
-                                        let final_text = stabilizer.finalize(&text);
-                                        if !final_text.trim().is_empty() {
-                                            maybe_send_update(
-                                                &caption_tx,
-                                                &mut last_caption,
-                                                &mut last_final,
-                                                final_text,
-                                                true,
-                                            );
-                                        }
-                                    }
-                                    Err(err) => {
-                                        tracing::warn!("transcription failed: {err:#}");
+                                } else if let Some(text) = transcribe_text(
+                                    transcriber.as_mut(),
+                                    &input_language,
+                                    mode,
+                                    false,
+                                    &audio,
+                                ) {
+                                    let final_text = stabilizer_primary.finalize(&text);
+                                    if !final_text.trim().is_empty() {
+                                        maybe_send_update(
+                                            &caption_tx,
+                                            &mut last_caption,
+                                            &mut last_final,
+                                            final_text,
+                                            true,
+                                        );
                                     }
                                 }
                             }
                             StreamingEvent::Reset => {
-                                stabilizer.reset();
+                                stabilizer_primary.reset();
+                                stabilizer_secondary.reset();
                                 if !last_caption.is_empty() {
                                     last_caption.clear();
                                     last_final = true;

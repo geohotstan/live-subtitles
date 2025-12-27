@@ -29,8 +29,9 @@ struct CaptionPayload {
 #[tauri::command]
 fn set_output_language(language: String, state: tauri::State<AppState>) -> Result<(), String> {
     let lang = match language.trim().to_lowercase().as_str() {
-        "english" => OutputLanguage::English,
-        "original" => OutputLanguage::Original,
+        "english" | "en" => OutputLanguage::English,
+        "chinese" | "zh" | "zh-cn" | "zh-hans" | "cn" | "original" => OutputLanguage::Chinese,
+        "bilingual" | "bi" | "zh-en" | "en-zh" => OutputLanguage::Bilingual,
         _ => return Err("unknown output language".into()),
     };
     state.output_language.set(lang);
@@ -39,8 +40,9 @@ fn set_output_language(language: String, state: tauri::State<AppState>) -> Resul
 
 fn output_language_label(lang: OutputLanguage) -> String {
     match lang {
-        OutputLanguage::Original => "original".to_string(),
+        OutputLanguage::Chinese => "chinese".to_string(),
         OutputLanguage::English => "english".to_string(),
+        OutputLanguage::Bilingual => "bilingual".to_string(),
     }
 }
 

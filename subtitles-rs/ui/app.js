@@ -20,6 +20,9 @@
   };
 
   const state = { ...defaults, ...loadPrefs() };
+  if (state.outputLanguage === "original") {
+    state.outputLanguage = "chinese";
+  }
   let clearTimer = null;
 
   function loadPrefs() {
@@ -180,7 +183,8 @@
         state.widthPct = Math.round(cfg.overlay_width_frac * 100);
       }
       if (!stored.outputLanguage && typeof cfg.output_language === "string") {
-        state.outputLanguage = cfg.output_language;
+        state.outputLanguage =
+          cfg.output_language === "original" ? "chinese" : cfg.output_language;
       }
       applyInitialState();
     });
