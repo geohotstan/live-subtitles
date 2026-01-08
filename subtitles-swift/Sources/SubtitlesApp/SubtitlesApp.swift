@@ -6,6 +6,8 @@ final class SubtitlesApp: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var startStopItem: NSMenuItem?
     private var settingsObserver: NSObjectProtocol?
+    private var spaceObserver: NSObjectProtocol?
+    private var screenObserver: NSObjectProtocol?
     private var keyMonitor: Any?
     private var localKeyMonitor: Any?
 
@@ -31,11 +33,18 @@ final class SubtitlesApp: NSObject, NSApplicationDelegate {
         setupStatusItem()
         installQuitKeyHandler()
         observeSettingsChanges()
+        observeSpaceChanges()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         if let settingsObserver {
             NotificationCenter.default.removeObserver(settingsObserver)
+        }
+        if let spaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver)
+        }
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
         }
         removeQuitKeyHandler()
         Task { @MainActor in
@@ -93,6 +102,28 @@ final class SubtitlesApp: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.reloadConfigAndRestartIfNeeded()
+            }
+        }
+    }
+
+    private func observeSpaceChanges() {
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshOverlayWindow()
+            }
+        }
+
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshOverlayWindow()
             }
         }
     }
@@ -187,10 +218,8 @@ final class SubtitlesApp: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func buildOverlayWindow() {
-        guard let screen = NSScreen.main else { return }
-        let frame = screen.frame
-        let height = min(260, frame.height * 0.3)
-        let rect = NSRect(x: frame.minX, y: frame.minY, width: frame.width, height: height)
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        let rect = overlayFrame(for: screen)
 
         let window = NSWindow(
             contentRect: rect,
@@ -201,8 +230,8 @@ final class SubtitlesApp: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        window.level = .statusBar
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        window.level = .screenSaver
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         window.ignoresMouseEvents = true
         window.isReleasedWhenClosed = false
 
@@ -211,6 +240,30 @@ final class SubtitlesApp: NSObject, NSApplicationDelegate {
 
         overlayWindow = window
         window.orderFrontRegardless()
+    }
+
+    @MainActor
+    private func refreshOverlayWindow() {
+        guard isRunning else { return }
+        guard let window = overlayWindow else {
+            buildOverlayWindow()
+            return
+        }
+
+        if let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first {
+            let rect = overlayFrame(for: screen)
+            if window.frame != rect {
+                window.setFrame(rect, display: true)
+            }
+        }
+
+        window.orderFrontRegardless()
+    }
+
+    private func overlayFrame(for screen: NSScreen) -> NSRect {
+        let frame = screen.frame
+        let height = min(260, frame.height * 0.3)
+        return NSRect(x: frame.minX, y: frame.minY, width: frame.width, height: height)
     }
 
     @MainActor
